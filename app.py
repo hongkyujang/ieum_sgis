@@ -65,7 +65,7 @@ def geocode_address(address_str):
     return None, None
 
 # 3. 메인 타이틀
-st.title("🗺️ SGIS 공간위치 기반 대학생 ↔ 강소기업 정밀 매칭 플랫폼")
+st.title("🗺️ SGIS 기반 대학생 ↔ 기업 매칭 플랫폼")
 st.caption("인문/사회, 공학, 디자인, 바이오 등 다양한 전공 기반의 알짜 강소·중견기업 공고와 내 위치 중심 매칭을 지원합니다.")
 
 # 사이드바 모드 전환
