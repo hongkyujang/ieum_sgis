@@ -31,8 +31,8 @@ if "jobs_db" not in st.session_state:
         {"job_id": "J09", "company_name": "SK케미칼", "company_type": "중견/대기업계열", "target_major": "화학공학과", "sig_category": "화학/소재", "required_skills": "고분자합성 공정제어 화학공학 유기화학 공정설계 품질관리", "address": "경기 성남시 분당구 판교로 310", "lat": 37.4045, "lon": 127.1070, "salary": "4,600만원"}
     ])
 
-# 등록 학생 DB 대폭 확충 (다양한 전공 및 스킬 세트)
-if "students_db" not in st.session_state:
+# 등록 학생 DB 대폭 확충 (KeyError 방지를 위해 address 컬럼 보장)
+if "students_db" not in st.session_state or "address" not in st.session_state.students_db.columns:
     st.session_state.students_db = pd.DataFrame([
         {"student_id": "S01", "name": "김철수", "major": "컴퓨터공학과", "sig_interests": "AI/ML, 데이터 엔지니어링", "skills": "Python PyTorch 딥러닝 ComputerVision OpenCV 데이터분석", "email": "chulsoo.kim@univ.ac.kr", "address": "서울시 강남구 역삼동"},
         {"student_id": "S02", "name": "이영희", "major": "경영학과", "sig_interests": "마케팅/기획", "skills": "퍼포먼스마케팅 데이터분석 SQL 서비스기획 마케팅전략 GA4", "email": "yh.lee@univ.ac.kr", "address": "서울시 송파구 잠실동"},
@@ -52,7 +52,7 @@ if "scout_history" not in st.session_state:
 @st.cache_data
 def geocode_address(address_str):
     try:
-        geolocator = Nominatim(user_agent="sigs_job_platform_v4")
+        geolocator = Nominatim(user_agent="sigs_job_platform_v5")
         location = geolocator.geocode(address_str)
         if location:
             return location.latitude, location.longitude
@@ -62,7 +62,7 @@ def geocode_address(address_str):
 
 # 3. 메인 타이틀
 st.title("🗺️ SGIS 공간위치 기반 대학생 ↔ 강소기업 정밀 매칭 플랫폼")
-st.caption("인무/사회, 공학, 디자인, 바이오 등 다양한 전공 기반의 알짜 강소·중견기업 공고와 내 위치 중심 매칭을 지원합니다.")
+st.caption("인문/사회, 공학, 디자인, 바이오 등 다양한 전공 기반의 알짜 강소·중견기업 공고와 내 위치 중심 매칭을 지원합니다.")
 
 # 사이드바 모드 전환
 mode = st.sidebar.radio(
@@ -190,7 +190,7 @@ if mode == "🎓 대학생 (내 근처 맞춤 기업 지도 탐색)":
             st.dataframe(res_df, column_config={"매칭 점수": st.column_config.NumberColumn(format="%d점")}, use_container_width=True, height=380, hide_index=True)
 
 # ==========================================
-# 모드 2: 기업 담당자 모드 (인재 발굴 기능 강화)
+# 모드 2: 기업 담당자 모드
 # ==========================================
 else:
     st.header("🏢 기업 전용 서비스: 공고 등록 및 맞춤형 인재 발굴")
@@ -205,19 +205,15 @@ else:
         if jobs_df.empty:
             st.info("등록된 기업 공고가 없습니다. 신규 공고를 먼저 등록해주세요.")
         else:
-            # 1. 자사 공고 선택 박스
             company_list = jobs_df['company_name'].tolist()
             selected_company_name = st.selectbox("🏢 인재를 검색할 자사 채용 공고를 선택하세요", company_list)
             
-            # 선택한 공고 정보 추출
             job_info = jobs_df[jobs_df['company_name'] == selected_company_name].iloc[0]
             
-            # 공고 조건 안내 카드
             st.info(f"📌 **[{job_info['company_name']}] 공고 조건** | 선호 전공: **{job_info['target_major']}** | 필수/우대 역량: `{job_info['required_skills']}` | 위치: {job_info['address']}")
             
             st.markdown("---")
             
-            # 2. 필터링 옵션 설정
             col_f1, col_f2 = st.columns(2)
             with col_f1:
                 filter_major_only = st.checkbox("선호 전공자만 검색 (전공 필터링)", value=False)
@@ -226,7 +222,7 @@ else:
 
             students_df = st.session_state.students_db.copy()
             
-            # 3. TF-IDF 알고리즘 기반 인재 역량 매칭 점수 계산
+            # TF-IDF 기반 인재 역량 매칭 점수 계산
             all_texts = [job_info['required_skills']] + list(students_df['skills'])
             vectorizer = TfidfVectorizer()
             tfidf_matrix = vectorizer.fit_transform(all_texts)
@@ -243,9 +239,10 @@ else:
                 
                 final_score = (skill_score * 0.5) + major_score + sig_score
                 
-                # 거리 계산
-                if pd.notnull(row['address']):
-                    st_lat, st_lon = geocode_address(row['address'])
+                # 안전한 address 컬럼 접근 (KeyError 방지)
+                student_addr = row.get('address', None)
+                if pd.notnull(student_addr) and student_addr != "":
+                    st_lat, st_lon = geocode_address(student_addr)
                     if st_lat and st_lon:
                         dist_km = round(geodesic((job_info['lat'], job_info['lon']), (st_lat, st_lon)).km, 1)
                     else:
@@ -260,20 +257,18 @@ else:
                     "전공": row['major'],
                     "관심 분야": row['sig_interests'],
                     "보유 역량": row['skills'],
-                    "거주지": row['address'],
+                    "거주지": student_addr if student_addr else "미입력",
                     "기업과의 거리": f"{dist_km} km" if isinstance(dist_km, float) else dist_km,
                     "이메일": row['email']
                 })
 
             res_df = pd.DataFrame(results)
             
-            # 필터링 적용
             if filter_major_only:
                 res_df = res_df[res_df['전공'] == job_info['target_major']]
             
             res_df = res_df[res_df['매칭 점수'] >= min_match_score].sort_values(by="매칭 점수", ascending=False)
 
-            # 4. 매칭 인재 결과 시각화 및 입사 제안(Scout) 기능
             st.markdown(f"### 🏆 [ {selected_company_name} ] 추천 인재 순위 ({len(res_df)}명 탐색됨)")
             
             if res_df.empty:
@@ -289,13 +284,11 @@ else:
                 st.markdown("---")
                 st.markdown("### ✉️ 우수 인재 상세 보기 및 입사 제안(Scout) 발송")
                 
-                # 상세 프로필 조회를 위한 인재 선택
                 candidate_names = res_df['이름'].tolist()
                 selected_candidate_name = st.selectbox("상세 프로필 확인 및 입사 제안할 인재를 선택하세요", candidate_names)
                 
                 candidate_info = res_df[res_df['이름'] == selected_candidate_name].iloc[0]
                 
-                # 인재 상세 프로필 카드
                 with st.expander(f"👤 {candidate_info['이름']} 학생 상세 프로필 보기 (매칭 점수: {candidate_info['매칭 점수']}점)", expanded=True):
                     c1, c2 = st.columns(2)
                     with c1:
