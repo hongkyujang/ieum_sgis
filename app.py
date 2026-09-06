@@ -9,7 +9,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 
 # 1. 페이지 기본 설정 및 브랜딩
 st.set_page_config(
-    page_title="SGIS 공간위치 기반 대학생-강소기업 매칭 플랫폼", 
+    page_title="SGIS 기반 대학생-기업 매칭 플랫폼", 
     page_icon="🗺️",
     layout="wide"
 )
@@ -47,6 +47,10 @@ if "students_db" not in st.session_state or "address" not in st.session_state.st
 # 스카우트 제안 내역 저장용 세션
 if "scout_history" not in st.session_state:
     st.session_state.scout_history = []
+
+# 학생 모드 검색 세션 상태 초기화
+if "student_search_triggered" not in st.session_state:
+    st.session_state.student_search_triggered = False
 
 # 지오코더 (주소 -> 위경도 변환)
 @st.cache_data
@@ -90,14 +94,6 @@ if mode == "🎓 대학생 (내 근처 맞춤 기업 지도 탐색)":
         value="서울시 강남구 역삼동"
     )
     
-    user_lat, user_lon = geocode_address(input_address)
-    
-    if user_lat is None or user_lon is None:
-        st.sidebar.warning("⚠️ 주소를 찾을 수 없어 기본 위치(서울 강남)로 설정됩니다.")
-        user_lat, user_lon = 37.4979, 127.0276
-    else:
-        st.sidebar.success(f"📍 위치 인식 완료: ({round(user_lat, 4)}, {round(user_lon, 4)})")
-
     max_distance_km = st.sidebar.slider("📏 통근 가능 최대 반경 범위 (km)", min_value=1, max_value=50, value=20)
     
     student_interests = st.sidebar.multiselect(
@@ -110,91 +106,105 @@ if mode == "🎓 대학생 (내 근처 맞춤 기업 지도 탐색)":
         value="Python PyTorch 딥러닝 ComputerVision OpenCV 데이터분석"
     )
 
-    # 거리 연산 및 공간 필터링
-    jobs_df = st.session_state.jobs_db.copy()
-    
-    def calc_dist(row):
-        return round(geodesic((user_lat, user_lon), (row['lat'], row['lon'])).km, 2)
+    # 🔍 검색 버튼 추가
+    search_btn = st.sidebar.button("🔍 내 근처 맞춤 기업 검색", type="primary", use_container_width=True)
 
-    jobs_df['distance_km'] = jobs_df.apply(calc_dist, axis=1)
-    filtered_jobs = jobs_df[jobs_df['distance_km'] <= max_distance_km].copy()
+    if search_btn or st.session_state.student_search_triggered:
+        st.session_state.student_search_triggered = True
 
-    col1, col2 = st.columns([1.2, 1])
-
-    with col1:
-        st.subheader(f"📍 '{input_address}' 주변 기업 지도 ({len(filtered_jobs)}개 검색됨)")
+        user_lat, user_lon = geocode_address(input_address)
         
-        m = folium.Map(location=[user_lat, user_lon], zoom_start=11)
+        if user_lat is None or user_lon is None:
+            st.sidebar.warning("⚠️ 주소를 찾을 수 없어 기본 위치(서울 강남)로 설정됩니다.")
+            user_lat, user_lon = 37.4979, 127.0276
+        else:
+            st.sidebar.success(f"📍 위치 인식 완료: ({round(user_lat, 4)}, {round(user_lon, 4)})")
+
+        # 거리 연산 및 공간 필터링
+        jobs_df = st.session_state.jobs_db.copy()
         
-        folium.Marker(
-            location=[user_lat, user_lon],
-            popup=f"<b>[내 위치] {student_name}님</b><br>{input_address}",
-            tooltip=f"내 위치 ({input_address})",
-            icon=folium.Icon(color="red", icon="user", prefix="fa")
-        ).add_to(m)
+        def calc_dist(row):
+            return round(geodesic((user_lat, user_lon), (row['lat'], row['lon'])).km, 2)
 
-        folium.Circle(
-            location=[user_lat, user_lon],
-            radius=max_distance_km * 1000,
-            color="#3186cc",
-            fill=True,
-            fill_opacity=0.1
-        ).add_to(m)
+        jobs_df['distance_km'] = jobs_df.apply(calc_dist, axis=1)
+        filtered_jobs = jobs_df[jobs_df['distance_km'] <= max_distance_km].copy()
 
-        for _, row in filtered_jobs.iterrows():
+        col1, col2 = st.columns([1.2, 1])
+
+        with col1:
+            st.subheader(f"📍 '{input_address}' 주변 기업 지도 ({len(filtered_jobs)}개 검색됨)")
+            
+            m = folium.Map(location=[user_lat, user_lon], zoom_start=11)
+            
             folium.Marker(
-                location=[row['lat'], row['lon']],
-                popup=f"<b>{row['company_name']}</b><br>선호 전공: {row['target_major']}<br>분야: {row['sig_category']}<br>거리: {row['distance_km']}km",
-                tooltip=f"{row['company_name']} ({row['distance_km']}km)",
-                icon=folium.Icon(color="blue", icon="building", prefix="fa")
+                location=[user_lat, user_lon],
+                popup=f"<b>[내 위치] {student_name}님</b><br>{input_address}",
+                tooltip=f"내 위치 ({input_address})",
+                icon=folium.Icon(color="red", icon="user", prefix="fa")
             ).add_to(m)
 
-        st_folium(m, width="100%", height=480)
+            folium.Circle(
+                location=[user_lat, user_lon],
+                radius=max_distance_km * 1000,
+                color="#3186cc",
+                fill=True,
+                fill_opacity=0.1
+            ).add_to(m)
 
-    with col2:
-        st.subheader(f"🎯 반경 {max_distance_km}km 내 추천 기업 리스트")
-        
-        if filtered_jobs.empty:
-            st.warning(f"선택한 위치에서 반경 {max_distance_km}km 내에 등록된 기업이 없습니다.")
-        else:
-            all_skills = list(filtered_jobs['required_skills']) + [student_skills]
-            vectorizer = TfidfVectorizer()
-            tfidf_matrix = vectorizer.fit_transform(all_skills)
+            for _, row in filtered_jobs.iterrows():
+                folium.Marker(
+                    location=[row['lat'], row['lon']],
+                    popup=f"<b>{row['company_name']}</b><br>선호 전공: {row['target_major']}<br>분야: {row['sig_category']}<br>거리: {row['distance_km']}km",
+                    tooltip=f"{row['company_name']} ({row['distance_km']}km)",
+                    icon=folium.Icon(color="blue", icon="building", prefix="fa")
+                ).add_to(m)
+
+            st_folium(m, width="100%", height=480)
+
+        with col2:
+            st.subheader(f"🎯 반경 {max_distance_km}km 내 추천 기업 리스트")
             
-            student_vec = tfidf_matrix[-1]
-            job_vecs = tfidf_matrix[:-1]
-            skill_sims = cosine_similarity(student_vec, job_vecs).flatten()
-
-            results = []
-            for idx, (_, row) in enumerate(filtered_jobs.iterrows()):
-                skill_score = skill_sims[idx] * 100
-                major_score = 20 if row['target_major'] == student_major else 0
-                sig_score = 30 if any(sig in row['sig_category'] for sig in student_interests) else 0
+            if filtered_jobs.empty:
+                st.warning(f"선택한 위치에서 반경 {max_distance_km}km 내에 등록된 기업이 없습니다.")
+            else:
+                all_skills = list(filtered_jobs['required_skills']) + [student_skills]
+                vectorizer = TfidfVectorizer()
+                tfidf_matrix = vectorizer.fit_transform(all_skills)
                 
-                final_score = (skill_score * 0.5) + major_score + sig_score
-                
-                results.append({
-                    "매칭 점수": round(final_score, 1),
-                    "기업명": row['company_name'],
-                    "선호 전공": row['target_major'],
-                    "거리(km)": f"{row['distance_km']} km",
-                    "SIG 분야": row['sig_category'],
-                    "요구 스킬": row['required_skills'],
-                    "연봉": row['salary']
-                })
+                student_vec = tfidf_matrix[-1]
+                job_vecs = tfidf_matrix[:-1]
+                skill_sims = cosine_similarity(student_vec, job_vecs).flatten()
 
-            res_df = pd.DataFrame(results).sort_values(by="매칭 점수", ascending=False)
-            top_company = res_df.iloc[0]
-            st.success(f"🔥 **{student_major}** 맞춤 추천 1순위: **{top_company['기업명']}** (거리: {top_company['거리(km)']}, 매칭률: **{top_company['매칭 점수']}점**)")
-            
-            st.dataframe(res_df, column_config={"매칭 점수": st.column_config.NumberColumn(format="%d점")}, use_container_width=True, height=380, hide_index=True)
+                results = []
+                for idx, (_, row) in enumerate(filtered_jobs.iterrows()):
+                    skill_score = skill_sims[idx] * 100
+                    major_score = 20 if row['target_major'] == student_major else 0
+                    sig_score = 30 if any(sig in row['sig_category'] for sig in student_interests) else 0
+                    
+                    final_score = (skill_score * 0.5) + major_score + sig_score
+                    
+                    results.append({
+                        "매칭 점수": round(final_score, 1),
+                        "기업명": row['company_name'],
+                        "선호 전공": row['target_major'],
+                        "거리(km)": f"{row['distance_km']} km",
+                        "SIG 분야": row['sig_category'],
+                        "요구 스킬": row['required_skills'],
+                        "연봉": row['salary']
+                    })
+
+                res_df = pd.DataFrame(results).sort_values(by="매칭 점수", ascending=False)
+                top_company = res_df.iloc[0]
+                st.success(f"🔥 **{student_major}** 맞춤 추천 1순위: **{top_company['기업명']}** (거리: {top_company['거리(km)']}, 매칭률: **{top_company['매칭 점수']}점**)")
+                
+                st.dataframe(res_df, column_config={"매칭 점수": st.column_config.NumberColumn(format="%d점")}, use_container_width=True, height=380, hide_index=True)
+    else:
+        st.info("👈 좌측 사이드바에서 프로필과 위치를 입력한 후 **'🔍 내 근처 맞춤 기업 검색'** 버튼을 눌러주세요.")
 
 # ==========================================
 # 모드 2: 기업 담당자 모드
 # ==========================================
 else:
-    st.header("🏢 기업 전용 서비스: 공고 등록 및 맞춤형 인재 발굴")
-    
     tab1, tab2, tab3 = st.tabs(["🔎 공고별 맞춤 인재 검색 & 스카우트", "➕ 신규 채용 공고 등록", "📫 입사 제안(Scout) 발송 내역"])
     
     # 탭 1: 고도화된 공고별 맞춤 인재 발굴
